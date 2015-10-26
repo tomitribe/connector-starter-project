@@ -26,8 +26,6 @@ import javax.resource.spi.ResourceAdapter;
 import javax.resource.spi.ResourceAdapterInternalException;
 import javax.resource.spi.endpoint.MessageEndpoint;
 import javax.resource.spi.endpoint.MessageEndpointFactory;
-import javax.resource.spi.work.Work;
-import javax.resource.spi.work.WorkManager;
 import javax.transaction.xa.XAResource;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -42,10 +40,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class SampleResourceAdapter implements ResourceAdapter {
 
     final Map<SampleActivationSpec, EndpointTarget> targets = new ConcurrentHashMap<SampleActivationSpec, EndpointTarget>();
-    private WorkManager workManager;
 
     public void start(BootstrapContext bootstrapContext) throws ResourceAdapterInternalException {
-        workManager = bootstrapContext.getWorkManager();
     }
 
     public void stop() {
@@ -56,45 +52,35 @@ public class SampleResourceAdapter implements ResourceAdapter {
     {
         final SampleActivationSpec sampleActivationSpec = (SampleActivationSpec) activationSpec;
 
-        workManager.scheduleWork(new Work() {
+        try {
+            final MessageEndpoint messageEndpoint = messageEndpointFactory.createEndpoint(null);
 
-            @Override
-            public void run() {
-                try {
-                    final MessageEndpoint messageEndpoint = messageEndpointFactory.createEndpoint(null);
+            final Class<?> endpointClass = sampleActivationSpec.getBeanClass() != null ? sampleActivationSpec
+                    .getBeanClass() : messageEndpointFactory.getEndpointClass();
 
-                    final Class<?> endpointClass = sampleActivationSpec.getBeanClass() != null ? sampleActivationSpec
-                            .getBeanClass() : messageEndpointFactory.getEndpointClass();
+            final List<Method> methodList = new ArrayList<>();
+            final Method[] methods = endpointClass.getMethods();
+            for (final Method method : methods) {
+                if (! Modifier.isPublic(method.getModifiers())) {
+                    continue;
+                }
 
-                    final List<Method> methodList = new ArrayList<>();
-                    final Method[] methods = endpointClass.getMethods();
-                    for (final Method method : methods) {
-                        if (! Modifier.isPublic(method.getModifiers())) {
-                            continue;
-                        }
+                if (method.getAnnotation(Execute.class) == null) {
+                    continue;
+                }
 
-                        if (method.getAnnotation(Execute.class) == null) {
-                            continue;
-                        }
+                if (method.getParameters().length == 1
+                        && String.class.equals(method.getParameters()[0].getType())) {
 
-                        if (method.getParameters().length == 1
-                                && String.class.equals(method.getParameters()[0].getType())) {
-
-                            methodList.add(method);
-                        }
-                    }
-
-                    final EndpointTarget target = new EndpointTarget(messageEndpoint, methodList.toArray(new Method[methodList.size()]));
-                    targets.put(sampleActivationSpec, target);
-                } catch (Exception e) {
-                    e.printStackTrace();
+                    methodList.add(method);
                 }
             }
 
-            @Override
-            public void release() {
-            }
-        });
+            final EndpointTarget target = new EndpointTarget(messageEndpoint, methodList.toArray(new Method[methodList.size()]));
+            targets.put(sampleActivationSpec, target);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public void endpointDeactivation(MessageEndpointFactory messageEndpointFactory, ActivationSpec activationSpec) {
